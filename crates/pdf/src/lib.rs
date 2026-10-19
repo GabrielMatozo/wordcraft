@@ -1090,6 +1090,13 @@ impl Exporter<'_> {
                 s.set_stroke(None);
             }
             Draw::Mark { .. } | Draw::MarkText { .. } => {}
+            // Dimming is screen-only: the PDF writer draws the page undimmed (`dim_header` and
+            // `dim_body` are off where it lays the page out), so a faded group draws as its items.
+            Draw::Faded { items, .. } => {
+                for it in items {
+                    self.draw(s, it);
+                }
+            }
             Draw::Clip { rect, items } => {
                 let Some(clip) = rect_path(rect) else { return };
                 s.push_clip_path(&clip, &FillRule::NonZero);

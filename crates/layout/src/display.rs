@@ -103,6 +103,11 @@ pub enum Draw {
     /// `items` clipped to `rect` (a Drawing Canvas's members to its frame). Inside a
     /// [`Draw::Rotated`], `rect` is in the turned frame's (unturned) coordinates.
     Clip { rect: Rect, items: Vec<Draw> },
+    /// `items` drawn together at `alpha` (a dimmed header, footer or body): faded as one group,
+    /// two of its lines that overlap keep the tone of the lines. Faded item by item, a line
+    /// crossing another faded twice, leaving 0.55² of the background at the crossing instead of
+    /// 0.55 (#2946).
+    Faded { alpha: f32, items: Vec<Draw> },
     /// Text drawn from its outlines with WordArt effects (and bent, in a warped text box):
     /// `path` in page coordinates, painted as [`crate::wordart::art_layers`] says. `color` is the
     /// run's own colour, the fill when the effects set none. `text_bg`: as for [`Draw::Glyphs`].
@@ -412,10 +417,12 @@ pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<D
     let hidden = opts.hide_object.as_ref().map(|p| Hidden::new(doc, p));
     let ha = if opts.dim_header { 0.45 } else { 1.0 };
     let ba = if opts.dim_body { 0.45 } else { 1.0 };
-    for (items, a) in [(&page.header, ha), (&page.footer, ha), (&page.items, ba)] {
+    let bars = opts.markup && (opts.revisions.insertions_deletions || opts.revisions.formatting) && opts.revisions.changed_lines != ChangeBar::None;
+    for (items, a, body) in [(&page.header, ha, false), (&page.footer, ha, false), (&page.items, ba, true)] {
         let warps = warped_boxes(doc, items);
         let clips = clipped_cells(items);
         let mut done: Vec<u32> = Vec::new();
+        let mut group = Vec::new();
         for it in items.iter() {
             // The object being dragged is drawn by its preview instead: leave it out here.
             if hidden.as_ref().is_some_and(|h| h.hides(it)) {
@@ -425,8 +432,8 @@ pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<D
                 && let Some(rect) = cell_clip(&clips, *story, &path.0)
             {
                 let mut inner = Vec::new();
-                item(doc, it, opts, a, &mut inner);
-                out.push(Draw::Clip { rect, items: inner });
+                item(doc, it, opts, 1.0, &mut inner);
+                group.push(Draw::Clip { rect, items: inner });
                 continue;
             }
             match it {
@@ -439,15 +446,22 @@ pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<D
                     if let Some((_, rect, warp)) = warps.iter().find(|(w, ..)| w == id) {
                         let lines: Vec<&Placed> =
                             items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if s == id)).collect();
-                        warped_text(doc, &lines, *rect, warp, opts, a, &mut out);
+                        warped_text(doc, &lines, *rect, warp, opts, 1.0, &mut group);
                     }
                 }
-                _ => item(doc, it, opts, a, &mut out),
+                _ => item(doc, it, opts, 1.0, &mut group),
             }
         }
-    }
-    if opts.markup && (opts.revisions.insertions_deletions || opts.revisions.formatting) && opts.revisions.changed_lines != ChangeBar::None {
-        change_bars(doc, page, &opts.revisions, ba, &mut out);
+        if body && bars {
+            change_bars(doc, page, &opts.revisions, 1.0, &mut group);
+        }
+        // The dimming goes on the group, not on each item: item by item, two of its lines that
+        // overlap fade twice (#2946).
+        if a < 1.0 && !group.is_empty() {
+            out.push(Draw::Faded { alpha: a, items: group });
+        } else {
+            out.extend(group);
+        }
     }
     out
 }

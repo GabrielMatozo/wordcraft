@@ -3363,6 +3363,22 @@ mod tests {
     use super::*;
     use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
+    /// The alpha each glyph run showing `marker` is drawn at, with the fade of every group over it
+    /// multiplied in: a dimmed header, footer or body is one faded group (#2946), so the item's own
+    /// alpha is only part of what the screen shows.
+    fn drawn_alphas(draws: &[wordcraft_layout::display::Draw], marker: &str, over: f32, out: &mut Vec<f32>) {
+        use wordcraft_layout::display::Draw;
+        for d in draws {
+            match d {
+                Draw::Glyphs { text, alpha, .. } if text.contains(marker) => out.push(over * alpha),
+                Draw::Faded { alpha, items } => drawn_alphas(items, marker, over * alpha, out),
+                Draw::Clip { items, .. } | Draw::Turned { items, .. } | Draw::Rotated { items, .. } => drawn_alphas(items, marker, over, out),
+                Draw::Figure { draws, .. } => drawn_alphas(draws, marker, over, out),
+                _ => {}
+            }
+        }
+    }
+
     /// A window-following layout size (#1876, Read Mode): applied at once on entry or when forced,
     /// held while the window is dragged, applied once the size has been still for the settle time.
     #[test]
@@ -3384,7 +3400,7 @@ mod tests {
     /// #2545: notes belong to the body editing context, not the faded header/footer context.
     #[test]
     fn editing_notes_keeps_the_body_and_active_note_opaque() {
-        use wordcraft_layout::display::{Draw, page_display};
+        use wordcraft_layout::display::page_display;
         for command in ["references.footnote", "references.endnote"] {
             let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Body marker.")), Default::default());
             app.run(command, json!({"text": "Note marker."})).unwrap();
@@ -3400,13 +3416,8 @@ mod tests {
                     let opts = page_render_options(&app, dims_body(&app, &layout));
                     let draws = page_display(&app.session.doc, &layout.pages[0], &opts.display);
                     for marker in ["Body", "Note", "Header"] {
-                        let alphas: Vec<f32> = draws
-                            .iter()
-                            .filter_map(|d| match d {
-                                Draw::Glyphs { text, alpha, .. } if text.contains(marker) => Some(*alpha),
-                                _ => None,
-                            })
-                            .collect();
+                        let mut alphas = Vec::new();
+                        drawn_alphas(&draws, marker, 1.0, &mut alphas);
                         assert!(!alphas.is_empty(), "{command}: {marker} is drawn");
                         let active = if marker == "Header" { story == header } else { story != header };
                         assert!(
