@@ -213,6 +213,9 @@ fn normal_document(s: &Session) -> Document {
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref()) {
         d.styles.default_chr.lang = Some(lang.clone());
     }
+    if s.prefs.default_no_proof {
+        d.styles.default_chr.no_proof = Some(true);
+    }
     d
 }
 
